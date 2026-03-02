@@ -15,20 +15,22 @@ import * as path from "node:path";
 
 const SPINNER_PRESETS = {
 	scanline: ["▏", "▎", "▍", "▌", "▋", "▊", "▉", "█", "▉", "▊", "▋", "▌", "▍", "▎"],
-	earth: ["🌍", "🛰️", "🌎", "🛰️", "🌏", "🛰️"],
 	moon: ["🌑", "🌒", "🌓", "🌔", "🌕", "🌖", "🌗", "🌘"],
 	weather: ["☀️", "🌤️", "⛅", "☁️", "🌧️", "⛈️", "🌂", "🌈"],
+	binary: ["   1", "  10", " 101", "0101", "1010", "0100", "1001", "0011", "0110", "1101", "101 ", "01  ", "1   "],
+	pi: ["   3", "  3.", " 3.1", "3.14", ".141", "1415", "4159", "1592", "5926", "9265", "2653", "6535", "5358", "3589", "5897", "8979", "9793", "7932", "9323", "3238", "2384", "3846", "8462", "4626", "6264", "2643", "6433", "4338", "3383", "3832", "8327", "3279", "2795", "7950", "9502", "5028", "0288", "2884", "8841", "8419", "4197", "1971", "971 ", "71  ", "1   "],
 } as const;
 
 type SpinnerPresetId = keyof typeof SPINNER_PRESETS;
 
-const SPINNER_ORDER: SpinnerPresetId[] = ["scanline", "earth", "moon", "weather"];
+const SPINNER_ORDER: SpinnerPresetId[] = ["scanline", "moon", "weather", "binary", "pi"];
 
 const SPINNER_LABELS: Record<SpinnerPresetId, string> = {
 	scanline: "Scanline",
-	earth: "Earth",
 	moon: "Moon",
 	weather: "Weather",
+	binary: "Binary Flip",
+	pi: "π",
 };
 
 interface SpinnerConfig {
