@@ -15,16 +15,16 @@ import * as path from "node:path";
 
 const SPINNER_PRESETS = {
 	scanline: ["▏", "▎", "▍", "▌", "▋", "▊", "▉", "█", "▉", "▊", "▋", "▌", "▍", "▎"],
-	chevronFlow: [">>>", ">>·", ">··", "···", "·<<", "<<<"],
+	earth: ["🌍", "🌎", "🌏"],
 } as const;
 
 type SpinnerPresetId = keyof typeof SPINNER_PRESETS;
 
-const SPINNER_ORDER: SpinnerPresetId[] = ["scanline", "chevronFlow"];
+const SPINNER_ORDER: SpinnerPresetId[] = ["scanline", "earth"];
 
 const SPINNER_LABELS: Record<SpinnerPresetId, string> = {
 	scanline: "Scanline",
-	chevronFlow: "Chevron Flow",
+	earth: "Earth",
 };
 
 interface SpinnerConfig {
