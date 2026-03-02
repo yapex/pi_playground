@@ -1,0 +1,12 @@
+{
+  "name": "pi-playground",
+  "version": "1.0.0",
+  "description": "Pi coding agent extensions playground",
+  "private": true,
+  "type": "module",
+  "devDependencies": {
+    "@mariozechner/pi-ai": "^0.55.3",
+    "@mariozechner/pi-coding-agent": "^0.55.3",
+    "typescript": "^5.7.0"
+  }
+}
