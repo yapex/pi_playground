@@ -14,7 +14,7 @@ For development, clone and add to `settings.json`: `{"packages": ["/path/to/pi_p
 
 ## Extensions
 
-### handoff.ts
+### handoff
 
 Transfer conversation context to a new focused session - an alternative to lossy compaction.
 
@@ -25,6 +25,40 @@ Transfer conversation context to a new focused session - an alternative to lossy
 ```
 
 **How it works:** Extracts relevant context from the conversation, uses LLM to generate a focused prompt, opens it for review/editing, then starts a new session with that prompt.
+
+### spinner
+
+Customize the loading spinner animation with fun presets.
+
+**Usage:**
+```
+/spinner    # Open spinner selector with live preview
+```
+
+**Available presets:**
+- **Scanline** - ASCII block animation
+- **Moon** - Lunar phase cycle 🌑🌒🌓🌔🌕🌖🌗🌘
+- **Weather** - Weather emoji sequence ☀️🌤️⛅☁️🌧️⛈️🌂🌈
+- **Binary Flip** - Binary number animation
+- **π** - Digits of pi scrolling by
+
+Selection is persisted in `~/.pi/agent/settings.json`.
+
+### files
+
+Browse and act on files in the current git tree plus session-referenced files.
+
+**Usage:**
+```
+/files    # Open file picker with quick actions
+/diff     # Alias to the same picker (useful for diffing)
+```
+
+**Features:**
+- Lists all tracked and untracked files in the git tree
+- Shows files referenced in the current session (reads, writes, edits)
+- Indicates git status (modified, staged, untracked)
+- Quick actions: **Reveal** (finder), **Open** (editor), **Edit** (in pi), **Diff** (git diff)
 
 ## Development
 
@@ -38,7 +72,9 @@ npm install  # For TypeScript type checking
 ```
 pi_playground/
 ├── extensions/          # Pi extensions (auto-discovered)
-│   └── handoff.ts       # Context transfer command
+│   ├── files/           # File browser with quick actions
+│   ├── handoff/         # Context transfer command
+│   └── spinner/         # Loading spinner customizer
 ├── package.json         # Pi manifest + dev dependencies
 └── tsconfig.json        # TypeScript configuration
 ```
