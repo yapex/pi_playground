@@ -10,6 +10,6 @@
     "forceConsistentCasingInFileNames": true,
     "noEmit": true
   },
-  "include": [".pi/extensions/**/*.ts"],
+  "include": ["extensions/**/*.ts"],
   "exclude": ["node_modules"]
 }
