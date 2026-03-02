@@ -10,7 +10,7 @@
  *   /handoff execute phase one of the plan
  *   /handoff check other places that need this fix
  *
- * The generated prompt appears as a draft in the editor for review/editing.
+ * The generated prompt is shown for review/editing, then automatically sent.
  */
 
 import { complete, type Message } from "@mariozechner/pi-ai";
@@ -172,9 +172,8 @@ export default function (pi: ExtensionAPI) {
 				return;
 			}
 
-			// Set the edited prompt in the main editor for submission
-			ctx.ui.setEditorText(editedPrompt);
-			ctx.ui.notify("Handoff ready. Submit when ready.", "info");
+			// User already reviewed/edited the prompt, send it directly
+			pi.sendUserMessage(editedPrompt);
 		},
 	});
 }
