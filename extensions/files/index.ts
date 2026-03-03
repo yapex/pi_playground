@@ -23,7 +23,7 @@ import type { ExtensionAPI, ExtensionContext, SessionEntry } from "@mariozechner
 import { DynamicBorder } from "@mariozechner/pi-coding-agent";
 import {
 	Container,
-	fuzzyFilter,
+	fuzzyMatch,
 	getEditorKeybindings,
 	Input,
 	matchesKey,
@@ -68,6 +68,285 @@ type GitStatusEntry = {
 };
 
 type FileToolName = "write" | "edit";
+
+type GroupedSelectItem = SelectItem & {
+	disabled?: boolean;
+	separator?: string;
+};
+
+type GroupedSelectListTheme = {
+	selectedPrefix: (text: string) => string;
+	selectedText: (text: string) => string;
+	description: (text: string) => string;
+	scrollInfo: (text: string) => string;
+	noMatch: (text: string) => string;
+	separator: (text: string) => string;
+};
+
+class GroupedSelectList {
+	private items: GroupedSelectItem[] = [];
+	private filteredItems: GroupedSelectItem[] = [];
+	private selectedIndex = 0;
+	private maxVisible = 5;
+	private theme: GroupedSelectListTheme;
+
+	onSelect?: (item: GroupedSelectItem) => void;
+	onCancel?: () => void;
+	onSelectionChange?: (item: GroupedSelectItem) => void;
+
+	constructor(items: GroupedSelectItem[], maxVisible: number, theme: GroupedSelectListTheme) {
+		this.items = items;
+		this.filteredItems = items;
+		this.maxVisible = maxVisible;
+		this.theme = theme;
+	}
+
+	setFilter(filter: string): void {
+		this.filteredItems = this.items.filter((item) => item.value.toLowerCase().startsWith(filter.toLowerCase()));
+		this.selectedIndex = 0;
+		this.skipDisabled();
+	}
+
+	setItems(items: GroupedSelectItem[]): void {
+		this.items = items;
+		this.filteredItems = items;
+		this.selectedIndex = 0;
+		this.skipDisabled();
+	}
+
+	setSelectedIndex(index: number): void {
+		this.selectedIndex = Math.max(0, Math.min(index, this.filteredItems.length - 1));
+		this.skipDisabled();
+	}
+
+	invalidate(): void {}
+
+	private skipDisabled(): void {
+		if (this.filteredItems.length === 0) return;
+
+		if (this.filteredItems[this.selectedIndex]?.disabled) {
+			const nextSelectable = this.findNextSelectable(this.selectedIndex, 1);
+			if (nextSelectable !== -1) {
+				this.selectedIndex = nextSelectable;
+			} else {
+				const prevSelectable = this.findNextSelectable(this.selectedIndex, -1);
+				if (prevSelectable !== -1) {
+					this.selectedIndex = prevSelectable;
+				}
+			}
+		}
+	}
+
+	private findNextSelectable(from: number, direction: 1 | -1): number {
+		let index = from + direction;
+		while (index >= 0 && index < this.filteredItems.length) {
+			if (!this.filteredItems[index].disabled) {
+				return index;
+			}
+			index += direction;
+		}
+		return -1;
+	}
+
+	render(width: number): string[] {
+		const lines: string[] = [];
+
+		if (this.filteredItems.length === 0) {
+			lines.push(this.theme.noMatch("  No matching files"));
+			return lines;
+		}
+
+		const startIndex = Math.max(0, Math.min(this.selectedIndex - Math.floor(this.maxVisible / 2), this.filteredItems.length - this.maxVisible));
+		const endIndex = Math.min(startIndex + this.maxVisible, this.filteredItems.length);
+
+		for (let i = startIndex; i < endIndex; i++) {
+			const item = this.filteredItems[i];
+			if (!item) continue;
+
+			if (item.disabled && item.separator) {
+				const separatorText = `── ${item.separator} ${"─".repeat(Math.max(0, width - item.separator.length - 6))}`;
+				lines.push(this.theme.separator(separatorText));
+				continue;
+			}
+
+			const isSelected = i === this.selectedIndex;
+			const descriptionSingleLine = item.description ? item.description.replace(/[\r\n]+/g, " ").trim() : undefined;
+			let line = "";
+
+			if (isSelected) {
+				const prefixWidth = 2;
+				const displayValue = item.label || item.value;
+				if (descriptionSingleLine && width > 40) {
+					const maxValueWidth = Math.min(30, width - prefixWidth - 4);
+					const truncatedValue = displayValue.length > maxValueWidth ? displayValue.slice(0, maxValueWidth) : displayValue;
+					const spacing = " ".repeat(Math.max(1, 32 - truncatedValue.length));
+
+					const descriptionStart = prefixWidth + truncatedValue.length + spacing.length;
+					const remainingWidth = width - descriptionStart - 2;
+					if (remainingWidth > 10) {
+						const truncatedDesc = descriptionSingleLine.length > remainingWidth ? descriptionSingleLine.slice(0, remainingWidth) : descriptionSingleLine;
+						line = this.theme.selectedText(`→ ${truncatedValue}${spacing}${truncatedDesc}`);
+					} else {
+						const maxWidth = width - prefixWidth - 2;
+						const truncated = displayValue.length > maxWidth ? displayValue.slice(0, maxWidth) : displayValue;
+						line = this.theme.selectedText(`→ ${truncated}`);
+					}
+				} else {
+					const maxWidth = width - prefixWidth - 2;
+					const truncated = displayValue.length > maxWidth ? displayValue.slice(0, maxWidth) : displayValue;
+					line = this.theme.selectedText(`→ ${truncated}`);
+				}
+			} else {
+				const displayValue = item.label || item.value;
+				const prefix = "  ";
+				if (descriptionSingleLine && width > 40) {
+					const maxValueWidth = Math.min(30, width - prefix.length - 4);
+					const truncatedValue = displayValue.length > maxValueWidth ? displayValue.slice(0, maxValueWidth) : displayValue;
+					const spacing = " ".repeat(Math.max(1, 32 - truncatedValue.length));
+
+					const descriptionStart = prefix.length + truncatedValue.length + spacing.length;
+					const remainingWidth = width - descriptionStart - 2;
+					if (remainingWidth > 10) {
+						const truncatedDesc = descriptionSingleLine.length > remainingWidth ? descriptionSingleLine.slice(0, remainingWidth) : descriptionSingleLine;
+						const descText = this.theme.description(spacing + truncatedDesc);
+						line = prefix + truncatedValue + descText;
+					} else {
+						const maxWidth = width - prefix.length - 2;
+						const truncated = displayValue.length > maxWidth ? displayValue.slice(0, maxWidth) : displayValue;
+						line = prefix + truncated;
+					}
+				} else {
+					const maxWidth = width - prefix.length - 2;
+					const truncated = displayValue.length > maxWidth ? displayValue.slice(0, maxWidth) : displayValue;
+					line = prefix + truncated;
+				}
+			}
+			lines.push(line);
+		}
+
+		if (startIndex > 0 || endIndex < this.filteredItems.length) {
+			const scrollText = `  (${this.selectedIndex + 1}/${this.filteredItems.length})`;
+			lines.push(this.theme.scrollInfo(scrollText.length > width - 2 ? scrollText.slice(0, width - 2) : scrollText));
+		}
+
+		return lines;
+	}
+
+	handleInput(keyData: string): void {
+		const kb = getEditorKeybindings();
+
+		if (kb.matches(keyData, "selectUp")) {
+			const newIndex = this.selectedIndex === 0 ? this.filteredItems.length - 1 : this.selectedIndex - 1;
+			this.selectedIndex = newIndex;
+			this.skipDisabled();
+			this.notifySelectionChange();
+		} else if (kb.matches(keyData, "selectDown")) {
+			const newIndex = this.selectedIndex === this.filteredItems.length - 1 ? 0 : this.selectedIndex + 1;
+			this.selectedIndex = newIndex;
+			this.skipDisabled();
+			this.notifySelectionChange();
+		} else if (kb.matches(keyData, "selectConfirm")) {
+			const selectedItem = this.filteredItems[this.selectedIndex];
+			if (selectedItem && !selectedItem.disabled && this.onSelect) {
+				this.onSelect(selectedItem);
+			}
+		} else if (kb.matches(keyData, "selectCancel")) {
+			if (this.onCancel) {
+				this.onCancel();
+			}
+		}
+	}
+
+	private notifySelectionChange(): void {
+		const selectedItem = this.filteredItems[this.selectedIndex];
+		if (selectedItem && this.onSelectionChange) {
+			this.onSelectionChange(selectedItem);
+		}
+	}
+
+	getSelectedItem(): GroupedSelectItem | null {
+		const item = this.filteredItems[this.selectedIndex];
+		return item && !item.disabled ? item : null;
+	}
+}
+
+const groupedFuzzyFilter = (
+	items: GroupedSelectItem[],
+	query: string,
+	getText: (item: GroupedSelectItem) => string,
+): GroupedSelectItem[] => {
+	if (!query.trim()) {
+		return items;
+	}
+
+	const tokens = query.trim().split(/\s+/).filter((t) => t.length > 0);
+	if (tokens.length === 0) {
+		return items;
+	}
+
+	const results: { item: GroupedSelectItem; totalScore: number }[] = [];
+	const separators: GroupedSelectItem[] = [];
+
+	for (const item of items) {
+		if (item.disabled && item.separator) {
+			separators.push(item);
+			continue;
+		}
+
+		const text = getText(item);
+		let totalScore = 0;
+		let allMatch = true;
+
+		for (const token of tokens) {
+			const match = fuzzyMatch(token, text);
+			if (match.matches) {
+				totalScore += match.score;
+			} else {
+				allMatch = false;
+				break;
+			}
+		}
+
+		if (allMatch) {
+			results.push({ item, totalScore });
+		}
+	}
+
+	results.sort((a, b) => a.totalScore - b.totalScore);
+
+	if (results.length === 0) {
+		return [];
+	}
+
+	const filteredItems = results.map((r) => r.item);
+
+	if (separators.length > 0) {
+		const hasChanged = filteredItems.some((item) => item.value.startsWith("changed:"));
+		const hasUnchanged = filteredItems.some((item) => item.value.startsWith("unchanged:"));
+
+		const finalItems: GroupedSelectItem[] = [];
+
+		if (hasChanged) {
+			const changedSeparator = separators.find((s) => s.separator === "Changed");
+			if (changedSeparator) {
+				finalItems.push(changedSeparator);
+			}
+			finalItems.push(...filteredItems.filter((item) => item.value.startsWith("changed:")));
+		}
+
+		if (hasUnchanged) {
+			const unchangedSeparator = separators.find((s) => s.separator === "Other files");
+			if (unchangedSeparator) {
+				finalItems.push(unchangedSeparator);
+			}
+			finalItems.push(...filteredItems.filter((item) => !item.value.startsWith("changed:") && !item.disabled));
+		}
+
+		return finalItems;
+	}
+
+	return filteredItems;
+};
 
 type SessionFileChange = {
 	operations: Set<FileToolName>;
@@ -846,14 +1125,51 @@ const showFileSelector = async (
 	selectedPath?: string | null,
 	gitRoot?: string | null,
 ): Promise<{ selected: FileEntry | null; quickAction: "diff" | null }> => {
-	const items: SelectItem[] = files.map((file) => {
-		const directoryLabel = file.isDirectory ? " [directory]" : "";
-		return {
-			value: file.canonicalPath,
-			label: `${file.displayPath}${directoryLabel}`,
-			description: file.status ? `[${file.status}]` : undefined,
-		};
-	});
+	const changedFiles = files.filter((f) => Boolean(f.status));
+	const unchangedFiles = files.filter((f) => !f.status);
+
+	const items: GroupedSelectItem[] = [];
+
+	if (changedFiles.length > 0) {
+		items.push({
+			value: "separator:changed",
+			label: "Changed",
+			disabled: true,
+			separator: "Changed",
+		});
+		for (const file of changedFiles) {
+			const directoryLabel = file.isDirectory ? " [directory]" : "";
+			items.push({
+				value: `changed:${file.canonicalPath}`,
+				label: `${file.displayPath}${directoryLabel}`,
+				description: file.status ? `[${file.status}]` : undefined,
+			});
+		}
+	}
+
+	if (unchangedFiles.length > 0) {
+		items.push({
+			value: "separator:unchanged",
+			label: "Other files",
+			disabled: true,
+			separator: "Other files",
+		});
+		for (const file of unchangedFiles) {
+			const directoryLabel = file.isDirectory ? " [directory]" : "";
+			items.push({
+				value: `unchanged:${file.canonicalPath}`,
+				label: `${file.displayPath}${directoryLabel}`,
+				description: file.status ? `[${file.status}]` : undefined,
+			});
+		}
+	}
+
+	const extractCanonicalPath = (value: string): string => {
+		if (value.startsWith("changed:") || value.startsWith("unchanged:")) {
+			return value.slice(value.indexOf(":") + 1);
+		}
+		return value;
+	};
 
 	let quickAction: "diff" | null = null;
 	const selection = await ctx.ui.custom<string | null>((tui, theme, _kb, done) => {
@@ -873,7 +1189,7 @@ const showFileSelector = async (
 		container.addChild(new DynamicBorder((str) => theme.fg("accent", str)));
 
 		let filteredItems = items;
-		let selectList: SelectList | null = null;
+		let selectList: GroupedSelectList | null = null;
 
 		const updateList = () => {
 			listContainer.clear();
@@ -883,22 +1199,29 @@ const showFileSelector = async (
 				return;
 			}
 
-			selectList = new SelectList(filteredItems, Math.min(filteredItems.length, 12), {
+			selectList = new GroupedSelectList(filteredItems, Math.min(filteredItems.length, 12), {
 				selectedPrefix: (text) => theme.fg("accent", text),
 				selectedText: (text) => theme.fg("accent", text),
 				description: (text) => theme.fg("muted", text),
 				scrollInfo: (text) => theme.fg("dim", text),
 				noMatch: (text) => theme.fg("warning", text),
+				separator: (text) => theme.fg("dim", text),
 			});
 
 			if (selectedPath) {
-				const index = filteredItems.findIndex((item) => item.value === selectedPath);
+				const index = filteredItems.findIndex((item) => {
+					if (item.disabled) return false;
+					return extractCanonicalPath(item.value) === selectedPath;
+				});
 				if (index >= 0) {
 					selectList.setSelectedIndex(index);
 				}
 			}
 
-			selectList.onSelect = (item) => done(item.value as string);
+			selectList.onSelect = (item) => {
+				const canonicalPath = extractCanonicalPath(item.value);
+				done(canonicalPath);
+			};
 			selectList.onCancel = () => done(null);
 
 			listContainer.addChild(selectList);
@@ -907,7 +1230,7 @@ const showFileSelector = async (
 		const applyFilter = () => {
 			const query = searchInput.getValue();
 			filteredItems = query
-				? fuzzyFilter(items, query, (item) => `${item.label} ${item.value} ${item.description ?? ""}`)
+				? groupedFuzzyFilter(items, query, (item) => `${item.label} ${extractCanonicalPath(item.value)} ${item.description ?? ""}`)
 				: items;
 			updateList();
 		};
@@ -925,14 +1248,15 @@ const showFileSelector = async (
 				if (matchesKey(data, "ctrl+shift+d")) {
 					const selected = selectList?.getSelectedItem();
 					if (selected) {
-						const file = files.find((entry) => entry.canonicalPath === selected.value);
+						const canonicalPath = extractCanonicalPath(selected.value);
+						const file = files.find((entry) => entry.canonicalPath === canonicalPath);
 						const canDiff = file?.isTracked && !file.isDirectory && Boolean(gitRoot);
 						if (!canDiff) {
 							ctx.ui.notify("Diff is only available for tracked files", "warning");
 							return;
 						}
 						quickAction = "diff";
-						done(selected.value as string);
+						done(canonicalPath);
 						return;
 					}
 				}
