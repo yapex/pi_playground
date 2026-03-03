@@ -57,6 +57,7 @@ Browse and act on files in the current git tree plus session-referenced files.
 **Features:**
 - Lists all tracked and untracked files in the git tree
 - Shows files referenced in the current session (reads, writes, edits)
+- Groups files into **Changed** (modified, staged, untracked) and **Other files** for quick access
 - Indicates git status (modified, staged, untracked)
 - Quick actions: **Reveal** (finder), **Open** (editor), **Edit** (in pi), **Diff** (git diff)
 

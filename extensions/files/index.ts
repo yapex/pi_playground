@@ -159,6 +159,31 @@ class GroupedSelectList {
 		const startIndex = Math.max(0, Math.min(this.selectedIndex - Math.floor(this.maxVisible / 2), this.filteredItems.length - this.maxVisible));
 		const endIndex = Math.min(startIndex + this.maxVisible, this.filteredItems.length);
 
+		// Find which separators are relevant for the visible range
+		const visibleSeparators = new Set<string>();
+		for (let i = startIndex; i < endIndex; i++) {
+			const item = this.filteredItems[i];
+			if (item && !item.disabled && item.value) {
+				// Find the separator for this item
+				for (let j = i - 1; j >= 0; j--) {
+					const prevItem = this.filteredItems[j];
+					if (prevItem?.disabled && prevItem.separator) {
+						visibleSeparators.add(prevItem.separator);
+						break;
+					}
+				}
+			}
+		}
+
+		// Render sticky separators at the top if their content is visible but the separator itself is not
+		for (const sep of visibleSeparators) {
+			const sepIndex = this.filteredItems.findIndex((item) => item.disabled && item.separator === sep);
+			if (sepIndex !== -1 && sepIndex < startIndex) {
+				const separatorText = `── ${sep} ${"─".repeat(Math.max(0, width - sep.length - 6))}`;
+				lines.push(this.theme.separator(separatorText));
+			}
+		}
+
 		for (let i = startIndex; i < endIndex; i++) {
 			const item = this.filteredItems[i];
 			if (!item) continue;
