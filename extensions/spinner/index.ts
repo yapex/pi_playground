@@ -41,9 +41,20 @@ const DEFAULT_CONFIG: SpinnerConfig = {
 	preset: "scanline",
 };
 
-let config: SpinnerConfig = { ...DEFAULT_CONFIG };
-let spinnerPatched = false;
-let loadedConfig = false;
+// Use globalThis to persist config across module reloads
+declare global {
+	// eslint-disable-next-line no-var
+	var __pi_spinner_config: SpinnerConfig | undefined;
+	// eslint-disable-next-line no-var
+	var __pi_spinner_patched: boolean | undefined;
+}
+
+function getConfig(): SpinnerConfig {
+	if (!globalThis.__pi_spinner_config) {
+		globalThis.__pi_spinner_config = { ...DEFAULT_CONFIG };
+	}
+	return globalThis.__pi_spinner_config;
+}
 
 const FRAME_INTERVAL_MS = 100;
 
@@ -52,7 +63,7 @@ function getSpinnerFrames(preset: SpinnerPresetId): readonly string[] {
 }
 
 function patchGlobalLoaderSpinner(): void {
-	if (spinnerPatched) return;
+	if (globalThis.__pi_spinner_patched) return;
 
 	const proto = Loader.prototype as any;
 	const originalUpdateDisplay = proto.updateDisplay;
@@ -63,14 +74,14 @@ function patchGlobalLoaderSpinner(): void {
 	}
 
 	proto.updateDisplay = function patchedUpdateDisplay(this: any, ...args: unknown[]) {
-		const frames = getSpinnerFrames(config.preset);
+		const frames = getSpinnerFrames(getConfig().preset);
 		this.frames = [...frames];
 		const current = Number(this.currentFrame ?? 0);
 		this.currentFrame = Number.isFinite(current) ? current % frames.length : 0;
 		return originalUpdateDisplay.apply(this, args);
 	};
 
-	spinnerPatched = true;
+	globalThis.__pi_spinner_patched = true;
 }
 
 function getSettingsPath(): string {
@@ -78,8 +89,6 @@ function getSettingsPath(): string {
 }
 
 async function loadConfig(): Promise<void> {
-	if (loadedConfig) return;
-
 	try {
 		const settingsPath = getSettingsPath();
 		const text = await fs.readFile(settingsPath, "utf-8");
@@ -87,13 +96,11 @@ async function loadConfig(): Promise<void> {
 		const spinner = (parsed?.spinner ?? {}) as { preset?: string };
 
 		if (spinner.preset && (SPINNER_ORDER as string[]).includes(spinner.preset)) {
-			config.preset = spinner.preset as SpinnerPresetId;
+			getConfig().preset = spinner.preset as SpinnerPresetId;
 		}
 	} catch {
-		// Use defaults
+		// Ignore errors
 	}
-
-	loadedConfig = true;
 }
 
 async function saveConfig(): Promise<void> {
@@ -108,7 +115,7 @@ async function saveConfig(): Promise<void> {
 		parsed = {};
 	}
 
-	parsed.spinner = { preset: config.preset };
+	parsed.spinner = { preset: getConfig().preset };
 
 	await fs.mkdir(dir, { recursive: true });
 	await fs.writeFile(settingsPath, JSON.stringify(parsed, null, 2), "utf-8");
@@ -120,7 +127,7 @@ async function openSpinnerSelector(ctx: ExtensionCommandContext) {
 	await loadConfig();
 
 	return ctx.ui.custom<SpinnerPresetId | null>((tui, theme, _kb, done) => {
-		let selectedIndex = SPINNER_ORDER.indexOf(config.preset);
+		let selectedIndex = SPINNER_ORDER.indexOf(getConfig().preset);
 		let previewFrameIndex = 0;
 
 		const previewTicker = setInterval(() => {
@@ -197,6 +204,7 @@ async function openSpinnerSelector(ctx: ExtensionCommandContext) {
 
 export default function (pi: ExtensionAPI) {
 	patchGlobalLoaderSpinner();
+	loadConfig();
 
 	pi.registerCommand("spinner", {
 		description: "Open spinner selector",
@@ -204,7 +212,7 @@ export default function (pi: ExtensionAPI) {
 			const result = await openSpinnerSelector(ctx);
 
 			if (result) {
-				config.preset = result;
+				getConfig().preset = result;
 				await saveConfig();
 				ctx.ui.notify(`Spinner set to: ${SPINNER_LABELS[result]}`, "info");
 			}
