@@ -450,6 +450,54 @@ const getGitFiles = async (
 	return { tracked, files };
 };
 
+const getDirectoryFiles = async (
+	pi: ExtensionAPI,
+	dir: string,
+	maxDepth: number = 3,
+): Promise<Array<{ canonicalPath: string; isDirectory: boolean }>> => {
+	const files: Array<{ canonicalPath: string; isDirectory: boolean }> = [];
+
+	// Use find command to list files with depth limit
+	const result = await pi.exec("find", [
+		dir,
+		"-maxdepth", String(maxDepth),
+		"-type", "f",
+		"-not", "-path", "*/node_modules/*",
+		"-not", "-path", "*/.git/*",
+		"-not", "-path", "*/.*",
+	], { cwd: dir });
+
+	if (result.code === 0 && result.stdout) {
+		for (const line of result.stdout.split("\n").filter(Boolean)) {
+			const canonical = toCanonicalPath(line);
+			if (canonical && !canonical.isDirectory) {
+				files.push(canonical);
+			}
+		}
+	}
+
+	// Also list directories (limited)
+	const dirResult = await pi.exec("find", [
+		dir,
+		"-maxdepth", String(maxDepth),
+		"-type", "d",
+		"-not", "-path", "*/node_modules/*",
+		"-not", "-path", "*/.git/*",
+		"-not", "-path", dir, // exclude the root dir itself
+	], { cwd: dir });
+
+	if (dirResult.code === 0 && dirResult.stdout) {
+		for (const line of dirResult.stdout.split("\n").filter(Boolean)) {
+			const canonical = toCanonicalPath(line);
+			if (canonical && canonical.isDirectory) {
+				files.push(canonical);
+			}
+		}
+	}
+
+	return files;
+};
+
 const buildFileEntries = async (pi: ExtensionAPI, ctx: ExtensionContext): Promise<{ files: FileEntry[]; gitRoot: string | null }> => {
 	const entries = ctx.sessionManager.getBranch();
 	const sessionChanges = collectSessionFileChanges(entries, ctx.cwd);
@@ -462,6 +510,9 @@ const buildFileEntries = async (pi: ExtensionAPI, ctx: ExtensionContext): Promis
 		const gitListing = await getGitFiles(pi, gitRoot);
 		trackedSet = gitListing.tracked;
 		gitFiles = gitListing.files;
+	} else {
+		// Fallback: list files in current directory when not in a git repo
+		gitFiles = await getDirectoryFiles(pi, ctx.cwd);
 	}
 
 	const fileMap = new Map<string, FileEntry>();
