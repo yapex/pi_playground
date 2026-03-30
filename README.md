@@ -44,23 +44,6 @@ Customize the loading spinner animation with fun presets.
 
 Selection is persisted in `~/.pi/agent/settings.json`.
 
-### files
-
-Browse and act on files in the current git tree plus session-referenced files.
-
-**Usage:**
-```
-/files    # Open file picker with quick actions
-/diff     # Alias to the same picker (useful for diffing)
-```
-
-**Features:**
-- Lists all tracked and untracked files in the git tree
-- Shows files referenced in the current session (reads, writes, edits)
-- Groups files into **Changed** (modified, staged, untracked) and **Other files** for quick access
-- Indicates git status (modified, staged, untracked)
-- Quick actions: **Reveal** (finder), **Open** (editor), **Edit** (in pi), **Diff** (git diff)
-
 ## Development
 
 ```bash
@@ -73,7 +56,6 @@ npm install  # For TypeScript type checking
 ```
 pi_playground/
 ├── extensions/          # Pi extensions (auto-discovered)
-│   ├── files/           # File browser with quick actions
 │   ├── handoff/         # Context transfer command
 │   └── spinner/         # Loading spinner customizer
 ├── package.json         # Pi manifest + dev dependencies
