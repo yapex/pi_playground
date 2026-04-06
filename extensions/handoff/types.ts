@@ -16,9 +16,9 @@ export type RelevantFile = Static<typeof RelevantFileSchema>;
  * This is what we expect the model to return as JSON
  */
 export const ExtractionOutputSchema = Type.Object({
-  detectedTask: Type.Optional(Type.String(), {
+  detectedTask: Type.Optional(Type.String({
     description: "Auto-detected next task (only in auto-detect mode)",
-  }),
+  })),
   relevantFiles: Type.Array(RelevantFileSchema, {
     description: "Files relevant to the next task",
   }),
@@ -68,7 +68,6 @@ export interface HandoffConfig {
   maxInformationItems: number;
   maxDecisionItems: number;
   maxOpenQuestions: number;
-  minGoalLength: number;
   includeMetadata: boolean;
   includeSkill: boolean;
   includeFileReasons: boolean;
@@ -88,7 +87,6 @@ export const DEFAULT_CONFIG: HandoffConfig = {
   maxInformationItems: 12,
   maxDecisionItems: 8,
   maxOpenQuestions: 6,
-  minGoalLength: 12,
   includeMetadata: true,
   includeSkill: true,
   includeFileReasons: true,

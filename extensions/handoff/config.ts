@@ -11,7 +11,6 @@ const VALID_CONFIG_KEYS: (keyof HandoffConfig)[] = [
   "maxInformationItems",
   "maxDecisionItems",
   "maxOpenQuestions",
-  "minGoalLength",
   "includeMetadata",
   "includeSkill",
   "includeFileReasons",
@@ -45,20 +44,6 @@ export function mergeConfig(
 }
 
 /**
- * Vague goals that should be rejected
- */
-const VAGUE_GOALS = new Set([
-  "continue",
-  "keep going",
-  "more",
-  "next",
-  "proceed",
-  "go on",
-  "resume",
-  "carry on",
-]);
-
-/**
  * Validation result for goal input
  */
 export interface GoalValidation {
@@ -67,13 +52,6 @@ export interface GoalValidation {
   autoDetect?: boolean;  // True if goal is empty and auto-detect is allowed
 }
 
-/**
- * Validates the user's goal input.
- *
- * @param goal - The goal string to validate
- * @param minLength - Minimum required length (after trimming)
- * @returns Validation result with error message if invalid
- */
 /**
  * Reads handoff config from .pi/settings.json in the given directory.
  * Returns undefined if file doesn't exist or has no handoff config.
@@ -111,10 +89,10 @@ export function loadConfig(cwd: string): HandoffConfig {
   return mergeConfig(overrides);
 }
 
-export function validateGoal(goal: string, minLength: number, allowAutoDetect = true): GoalValidation {
+export function validateGoal(goal: string, allowAutoDetect = true): GoalValidation {
   const trimmed = goal.trim();
 
-  // Empty goal: either auto-detect or error
+  // Empty goal: auto-detect
   if (trimmed.length === 0) {
     if (allowAutoDetect) {
       return { valid: true, autoDetect: true };
@@ -125,21 +103,6 @@ export function validateGoal(goal: string, minLength: number, allowAutoDetect = 
     };
   }
 
-  // Check for vague goals
-  if (VAGUE_GOALS.has(trimmed.toLowerCase())) {
-    return {
-      valid: false,
-      error: `"${trimmed}" is too vague. Be specific: what should the next thread accomplish? Example: "implement team-level handoff, update tests, document API."`,
-    };
-  }
-
-  // Check minimum length
-  if (trimmed.length < minLength) {
-    return {
-      valid: false,
-      error: `Goal is too short (${trimmed.length} chars, minimum ${minLength}). Be more specific about what should be accomplished.`,
-    };
-  }
-
+  // Non-empty goal is always valid
   return { valid: true, autoDetect: false };
 }

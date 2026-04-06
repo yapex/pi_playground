@@ -5,14 +5,7 @@ import {
   Text,
   type TUI,
 } from "@mariozechner/pi-tui";
-import { DynamicBorder } from "@mariozechner/pi-coding-agent";
-
-/**
- * Theme interface for progress component styling
- */
-interface ProgressTheme {
-  fg: (color: string, text: string) => string;
-}
+import { DynamicBorder, type Theme } from "@mariozechner/pi-coding-agent";
 
 /**
  * Progress phases for handoff extraction
@@ -34,14 +27,14 @@ export class ProgressLoader extends Container {
   private startTime: number;
   private elapsedText: Text;
   private currentPhase: string;
-  private theme: ProgressTheme;
+  private theme: Theme;
   private tui: TUI;
   private elapsedIntervalId?: ReturnType<typeof setInterval>;
 
   /** Called when user presses Escape */
   onAbort?: () => void;
 
-  constructor(tui: TUI, theme: ProgressTheme, initialPhase: string) {
+  constructor(tui: TUI, theme: Theme, initialPhase: string) {
     super();
     this.tui = tui;
     this.theme = theme;

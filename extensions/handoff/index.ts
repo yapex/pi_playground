@@ -17,6 +17,7 @@ import { complete, getModel, type Message, type Model } from "@mariozechner/pi-a
 import type {
   ExtensionAPI,
   ExtensionCommandContext,
+  SessionEntry,
 } from "@mariozechner/pi-coding-agent";
 import {
   BorderedLoader,
@@ -64,7 +65,8 @@ function resolveExtractionModel(
     return ctx.model;
   }
 
-  const overrideModel = getModel(provider, modelId);
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const overrideModel = getModel(provider as any, modelId as any);
   if (!overrideModel) {
     // Model not found, fall back to current
     console.warn(`Handoff: Model ${config.model} not found, using current model`);
@@ -89,7 +91,7 @@ async function runHandoffCommand(
 
   // Validate goal (allowAutoDetect = true by default)
   const goal = args?.trim() ?? "";
-  const goalValidation = validateGoal(goal, config.minGoalLength, true);
+  const goalValidation = validateGoal(goal, true);
 
   if (!goalValidation.valid) {
     if (ctx.hasUI) {
@@ -113,9 +115,11 @@ async function runHandoffCommand(
     return;
   }
 
-  // Get conversation context
-  const sessionContext = ctx.sessionManager.buildSessionContext();
-  const messages = sessionContext.messages;
+  // Get conversation context from current branch
+  const branch = ctx.sessionManager.getBranch();
+  const messages = branch
+    .filter((entry): entry is SessionEntry & { type: "message" } => entry.type === "message")
+    .map((entry) => entry.message);
 
   if (messages.length === 0) {
     const errorMsg = "No conversation to hand off.";
@@ -213,8 +217,9 @@ async function runHandoffCommand(
     return;
   }
 
-  // Auto-send the edited prompt to start the new session
-  pi.sendUserMessage(editedPrompt);
+  // Set the edited prompt in the main editor for submission
+  ctx.ui.setEditorText(editedPrompt);
+  ctx.ui.notify("Handoff ready. Submit when ready.", "info");
 }
 
 /**
@@ -305,7 +310,11 @@ async function doExtraction(
   model: Model<any>,
   signal?: AbortSignal,
 ): Promise<ExtractionResult> {
-  const apiKey = await ctx.modelRegistry.getApiKey(model);
+  // Get API key for the model
+  const auth = await ctx.modelRegistry.getApiKeyAndHeaders(model);
+  if (!auth.ok) {
+    return { success: false, error: `Failed to get API key for ${model.provider}/${model.id}: ${auth.error}` };
+  }
 
   // Build user message based on mode
   const userContent = autoDetect
@@ -327,7 +336,7 @@ async function doExtraction(
   const response = await complete(
     model,
     { systemPrompt, messages: [userMessage] },
-    { apiKey, signal },
+    { apiKey: auth.apiKey, signal },
   );
 
   if (response.stopReason === "aborted") {
@@ -369,7 +378,7 @@ async function doExtraction(
       systemPrompt,
       messages: [userMessage, assistantMessage, retryMessage],
     },
-    { apiKey, signal },
+    { apiKey: auth.apiKey, signal },
   );
 
   if (retryResponse.stopReason === "aborted") {
@@ -406,7 +415,11 @@ async function doExtractionWithPhases(
   signal: AbortSignal,
   onPhase: (phase: string) => void,
 ): Promise<ExtractionResult> {
-  const apiKey = await ctx.modelRegistry.getApiKey(model);
+  // Get API key for the model
+  const auth = await ctx.modelRegistry.getApiKeyAndHeaders(model);
+  if (!auth.ok) {
+    return { success: false, error: `Failed to get API key for ${model.provider}/${model.id}: ${auth.error}` };
+  }
 
   // Phase 1: Analyzing conversation
   const phase1Text = autoDetect 
@@ -437,7 +450,7 @@ async function doExtractionWithPhases(
   const response = await complete(
     model,
     { systemPrompt, messages: [userMessage] },
-    { apiKey, signal },
+    { apiKey: auth.apiKey, signal },
   );
 
   if (response.stopReason === "aborted") {
@@ -484,7 +497,7 @@ async function doExtractionWithPhases(
       systemPrompt,
       messages: [userMessage, assistantMessage, retryMessage],
     },
-    { apiKey, signal },
+    { apiKey: auth.apiKey, signal },
   );
 
   if (retryResponse.stopReason === "aborted") {
