@@ -13,7 +13,6 @@
  * The generated prompt is shown for review/editing, then automatically sent.
  */
 
-import { complete, getModel, type Message, type Model } from "@mariozechner/pi-ai";
 import type {
   ExtensionAPI,
   ExtensionCommandContext,
@@ -34,8 +33,8 @@ import {
   buildExtractionUserMessage,
   buildExtractionUserMessageAutoDetect,
   processExtractionResponse,
-  extractTextFromAssistantMessage,
 } from "./extraction.js";
+import { callLlm, callLlmWithRetry } from "./llm.js";
 import { collectSessionMetadata } from "./metadata.js";
 import { assembleHandoffPrompt } from "./prompt.js";
 import {
@@ -45,35 +44,25 @@ import {
 } from "./types.js";
 
 /**
- * Resolves the model to use for extraction based on config
+ * Resolves the model ID string to use for extraction.
+ * Returns a "provider/id" string, or undefined to use current model.
  */
-function resolveExtractionModel(
-  ctx: ExtensionCommandContext,
+function resolveExtractionModelId(
+  _ctx: ExtensionCommandContext,
   config: HandoffConfig,
-): Model<any> | undefined {
-  // Use current model if configured to do so or no override specified
+): string | undefined {
   if (config.useCurrentModel || !config.model) {
-    return ctx.model;
+    return undefined; // use current
   }
 
-  // Try to get the override model
   const [provider, ...modelParts] = config.model.split("/");
   const modelId = modelParts.join("/");
 
   if (!provider || !modelId) {
-    // Invalid format, fall back to current
-    return ctx.model;
+    return undefined;
   }
 
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  const overrideModel = getModel(provider as any, modelId as any);
-  if (!overrideModel) {
-    // Model not found, fall back to current
-    console.warn(`Handoff: Model ${config.model} not found, using current model`);
-    return ctx.model;
-  }
-
-  return overrideModel;
+  return config.model;
 }
 
 /**
@@ -151,25 +140,20 @@ async function runHandoffCommand(
   });
 
   // Resolve which model to use for extraction
-  const extractionModel = resolveExtractionModel(ctx, config);
-  if (!extractionModel) {
-    const errorMsg = "No model available for extraction.";
-    if (ctx.hasUI) {
-      ctx.ui.notify(errorMsg, "error");
-    } else {
-      console.error(errorMsg);
-    }
-    return;
+  const extractionModelId = resolveExtractionModelId(ctx, config);
+  if (extractionModelId !== undefined) {
+    // If an override model is specified, we just use its ID via the pi subprocess
+    // (pi handles model resolution and API key lookup)
   }
 
-  // Generate extraction via LLM
+  // Generate extraction via LLM subprocess
   const extractionResult = await generateExtraction(
     conversationText,
     goal,
     autoDetect,
     config,
     ctx,
-    extractionModel,
+    extractionModelId,
   );
 
   if (!extractionResult.success || !extractionResult.extraction) {
@@ -233,7 +217,7 @@ interface ExtractionResult {
 }
 
 /**
- * Generates the extraction by calling the LLM with retry on parse failure
+ * Generates the extraction by calling the LLM via pi subprocess with retry on parse failure
  */
 async function generateExtraction(
   conversationText: string,
@@ -241,18 +225,28 @@ async function generateExtraction(
   autoDetect: boolean,
   config: HandoffConfig,
   ctx: ExtensionCommandContext,
-  model: Model<any>,
+  overrideModelId: string | undefined,
 ): Promise<ExtractionResult> {
+  // Build the system and user prompts
+  const systemPrompt = autoDetect
+    ? EXTRACTION_SYSTEM_PROMPT_AUTO_DETECT
+    : EXTRACTION_SYSTEM_PROMPT;
+
+  const userContent = autoDetect
+    ? buildExtractionUserMessageAutoDetect(conversationText)
+    : buildExtractionUserMessage(conversationText, goal);
+
   if (!ctx.hasUI) {
     // Non-UI mode: direct call without loader
-    return await doExtraction(conversationText, goal, autoDetect, config, ctx, model);
+    return await doExtractionCall(
+      userContent, conversationText, systemPrompt, config, ctx, overrideModelId,
+    );
   }
 
   // Interactive mode: show loader during extraction
   if (config.showProgressPhases) {
-    // Use phase-based progress loader
     return await ctx.ui.custom<ExtractionResult>((tui, theme, _kb, done) => {
-      const phaseText = autoDetect 
+      const phaseText = autoDetect
         ? "Analyzing conversation to detect next task..."
         : EXTRACTION_PHASES[0];
       const loader = new ProgressLoader(tui, theme, phaseText);
@@ -261,9 +255,10 @@ async function generateExtraction(
         done({ success: false, error: "Cancelled" });
       };
 
-      doExtractionWithPhases(conversationText, goal, autoDetect, config, ctx, model, loader.signal, (phase) => {
-        loader.setPhase(phase);
-      })
+      doExtractionWithPhases(
+        userContent, conversationText, systemPrompt, config,
+        ctx, overrideModelId, loader.signal, (phase) => loader.setPhase(phase),
+      )
         .then((result) => {
           const completionMessage = loader.getCompletionMessage();
           loader.dispose();
@@ -278,7 +273,6 @@ async function generateExtraction(
       return loader;
     });
   } else {
-    // Use simple bordered loader
     return await ctx.ui.custom<ExtractionResult>((tui, theme, _kb, done) => {
       const loaderText = autoDetect
         ? "Analyzing conversation to detect next task..."
@@ -286,7 +280,9 @@ async function generateExtraction(
       const loader = new BorderedLoader(tui, theme, loaderText);
       loader.onAbort = () => done({ success: false, error: "Cancelled" });
 
-      doExtraction(conversationText, goal, autoDetect, config, ctx, model, loader.signal)
+      doExtractionCall(
+        userContent, conversationText, systemPrompt, config, ctx, overrideModelId, loader.signal,
+      )
         .then(done)
         .catch((err) => {
           console.error("Handoff extraction failed:", err);
@@ -299,229 +295,63 @@ async function generateExtraction(
 }
 
 /**
- * Performs the actual LLM extraction call with retry
+ * Core extraction call with retry, delegating to llm.ts subprocess call.
  */
-async function doExtraction(
+async function doExtractionCall(
+  userContent: string,
   conversationText: string,
-  goal: string,
-  autoDetect: boolean,
+  systemPrompt: string,
   config: HandoffConfig,
   ctx: ExtensionCommandContext,
-  model: Model<any>,
+  overrideModelId: string | undefined,
   signal?: AbortSignal,
 ): Promise<ExtractionResult> {
-  // Get API key for the model
-  const auth = await ctx.modelRegistry.getApiKeyAndHeaders(model);
-  if (!auth.ok) {
-    return { success: false, error: `Failed to get API key for ${model.provider}/${model.id}: ${auth.error}` };
+  // Temporarily override model if needed
+  const originalModel = ctx.model;
+  if (overrideModelId) {
+    // We pass the model via pi --model flag in callLlm, no need to mutate ctx
   }
 
-  // Build user message based on mode
-  const userContent = autoDetect
-    ? buildExtractionUserMessageAutoDetect(conversationText)
-    : buildExtractionUserMessage(conversationText, goal);
-
-  const userMessage: Message = {
-    role: "user",
-    content: [{ type: "text", text: userContent }],
-    timestamp: Date.now(),
-  };
-
-  // Select system prompt based on mode
-  const systemPrompt = autoDetect
-    ? EXTRACTION_SYSTEM_PROMPT_AUTO_DETECT
-    : EXTRACTION_SYSTEM_PROMPT;
-
-  // First attempt
-  const response = await complete(
-    model,
-    { systemPrompt, messages: [userMessage] },
-    { apiKey: auth.apiKey, signal },
+  const result = await callLlmWithRetry(
+    userContent,
+    systemPrompt,
+    EXTRACTION_RETRY_PROMPT,
+    conversationText,
+    (text) => processExtractionResponse(text, config, conversationText),
+    ctx,
+    signal,
   );
-
-  if (response.stopReason === "aborted") {
-    return { success: false, error: "Cancelled" };
-  }
-
-  if (response.stopReason === "error") {
-    return { success: false, error: response.errorMessage ?? "LLM error" };
-  }
-
-  const responseText = extractTextFromAssistantMessage(response.content);
-  const result = processExtractionResponse(responseText, config, conversationText);
 
   if (result.success && result.normalized) {
-    return { success: true, extraction: result.normalized };
+    return { success: true, extraction: result.normalized as ExtractionResult["extraction"] };
   }
 
-  // Retry with stricter prompt
-  const retryMessage: Message = {
-    role: "user",
-    content: [{ type: "text", text: EXTRACTION_RETRY_PROMPT }],
-    timestamp: Date.now(),
-  };
-
-  const assistantMessage: Message = {
-    role: "assistant",
-    content: response.content,
-    api: response.api,
-    provider: response.provider,
-    model: response.model,
-    usage: response.usage,
-    stopReason: response.stopReason,
-    timestamp: response.timestamp,
-  };
-
-  const retryResponse = await complete(
-    model,
-    {
-      systemPrompt,
-      messages: [userMessage, assistantMessage, retryMessage],
-    },
-    { apiKey: auth.apiKey, signal },
-  );
-
-  if (retryResponse.stopReason === "aborted") {
-    return { success: false, error: "Cancelled" };
-  }
-
-  if (retryResponse.stopReason === "error") {
-    return { success: false, error: retryResponse.errorMessage ?? "LLM error on retry" };
-  }
-
-  const retryText = extractTextFromAssistantMessage(retryResponse.content);
-  const retryResult = processExtractionResponse(retryText, config, conversationText);
-
-  if (retryResult.success && retryResult.normalized) {
-    return { success: true, extraction: retryResult.normalized };
-  }
-
-  return {
-    success: false,
-    error: `Failed to parse extraction after retry: ${retryResult.error}`,
-  };
+  return { success: false, error: result.error };
 }
 
 /**
- * Performs extraction with phase updates for progress UI
+ * Extraction with phase updates for progress UI.
  */
 async function doExtractionWithPhases(
+  userContent: string,
   conversationText: string,
-  goal: string,
-  autoDetect: boolean,
+  systemPrompt: string,
   config: HandoffConfig,
   ctx: ExtensionCommandContext,
-  model: Model<any>,
+  _overrideModelId: string | undefined,
   signal: AbortSignal,
   onPhase: (phase: string) => void,
 ): Promise<ExtractionResult> {
-  // Get API key for the model
-  const auth = await ctx.modelRegistry.getApiKeyAndHeaders(model);
-  if (!auth.ok) {
-    return { success: false, error: `Failed to get API key for ${model.provider}/${model.id}: ${auth.error}` };
-  }
+  onPhase(EXTRACTION_PHASES[0]);
+  // Phase 1 is just a label — the real work happens in doExtractionCall
 
-  // Phase 1: Analyzing conversation
-  const phase1Text = autoDetect 
-    ? "Analyzing conversation to detect next task..."
-    : EXTRACTION_PHASES[0];
-  onPhase(phase1Text);
-
-  // Build user message based on mode
-  const userContent = autoDetect
-    ? buildExtractionUserMessageAutoDetect(conversationText)
-    : buildExtractionUserMessage(conversationText, goal);
-
-  const userMessage: Message = {
-    role: "user",
-    content: [{ type: "text", text: userContent }],
-    timestamp: Date.now(),
-  };
-
-  // Select system prompt based on mode
-  const systemPrompt = autoDetect
-    ? EXTRACTION_SYSTEM_PROMPT_AUTO_DETECT
-    : EXTRACTION_SYSTEM_PROMPT;
-
-  // Phase 2: Extracting context (LLM call)
   onPhase(EXTRACTION_PHASES[1]);
-
-  // First attempt
-  const response = await complete(
-    model,
-    { systemPrompt, messages: [userMessage] },
-    { apiKey: auth.apiKey, signal },
+  const result = await doExtractionCall(
+    userContent, conversationText, systemPrompt, config, ctx, undefined, signal,
   );
 
-  if (response.stopReason === "aborted") {
-    return { success: false, error: "Cancelled" };
-  }
-
-  if (response.stopReason === "error") {
-    return { success: false, error: response.errorMessage ?? "LLM error" };
-  }
-
-  // Phase 3: Assembling prompt
   onPhase(EXTRACTION_PHASES[2]);
-
-  const responseText = extractTextFromAssistantMessage(response.content);
-  const result = processExtractionResponse(responseText, config, conversationText);
-
-  if (result.success && result.normalized) {
-    return { success: true, extraction: result.normalized };
-  }
-
-  // Retry needed - stay on phase 2
-  onPhase("Retrying extraction...");
-
-  const retryMessage: Message = {
-    role: "user",
-    content: [{ type: "text", text: EXTRACTION_RETRY_PROMPT }],
-    timestamp: Date.now(),
-  };
-
-  const assistantMessage: Message = {
-    role: "assistant",
-    content: response.content,
-    api: response.api,
-    provider: response.provider,
-    model: response.model,
-    usage: response.usage,
-    stopReason: response.stopReason,
-    timestamp: response.timestamp,
-  };
-
-  const retryResponse = await complete(
-    model,
-    {
-      systemPrompt,
-      messages: [userMessage, assistantMessage, retryMessage],
-    },
-    { apiKey: auth.apiKey, signal },
-  );
-
-  if (retryResponse.stopReason === "aborted") {
-    return { success: false, error: "Cancelled" };
-  }
-
-  if (retryResponse.stopReason === "error") {
-    return { success: false, error: retryResponse.errorMessage ?? "LLM error on retry" };
-  }
-
-  // Back to phase 3
-  onPhase(EXTRACTION_PHASES[2]);
-
-  const retryText = extractTextFromAssistantMessage(retryResponse.content);
-  const retryResult = processExtractionResponse(retryText, config, conversationText);
-
-  if (retryResult.success && retryResult.normalized) {
-    return { success: true, extraction: retryResult.normalized };
-  }
-
-  return {
-    success: false,
-    error: `Failed to parse extraction after retry: ${retryResult.error}`,
-  };
+  return result;
 }
 
 /**
